@@ -10,7 +10,7 @@ A protocol decoder is included at `decoders/mdc1200.py`. It follows the implemen
 - Both sync polarities and both analyzer input bit mappings
 - 112-bit encoded payload extraction
 - 7-byte data + 7-byte rate-1/2, K=7 FEC decoding
-- De-interleaving, firmware-style error correction, and CRC-16/XMODEM validation
+- De-interleaving, firmware-style error correction, and an emulation of the DP32G030 hardware CRC configuration used by the firmware
 - Reports opcode, argument, and 16-bit unit ID only when the packet CRC validates
 
 ### Install / use
