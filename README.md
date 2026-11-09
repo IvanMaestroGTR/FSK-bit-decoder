@@ -17,7 +17,7 @@ A protocol decoder is included at `decoders/mdc1200.py`. It follows the implemen
 
 1. Copy `decoders/mdc1200.py` into the `decoders` folder beside `tmid_analyzer.py`.
 2. Open the WAV in FSK-bit-decoder. Frequency mode now defaults to Auto and estimates two recurring tones from overlapping 20 ms windows. For MDC1200 and FleetSync, expect the standard 1200/1800 Hz pair; Bell 202 commonly uses 1200/2200 Hz. Confirm the detected pair in the settings before decoding. Select Manual only when you need to override the estimates.
-3. Keep the full recording in the analysis. The MDC decoder searches the complete symbol stream, including the warble/preamble; it does not rely on the analyzer's estimated data-start marker.
+3. Keep the full recording in the analysis. The decoder searches the complete symbol stream; the analyzer’s data-start estimate is only a visual guide and does not trim the bits passed to the decoder.
 4. Click **Analyze**, then choose **MDC1200 – sync + FEC + CRC** in the Decoder list.
 
 A successful result is labelled **MDC1200 PACKET VALID**. A sync match without a passing FEC/CRC is not reported as a valid packet. The analyzer's data-start estimate can be several symbols later than the actual MDC sync, so the decoder intentionally reads `all_bits` rather than only `bits`. This is an audio-side decoder; it does not emulate BK4819 hardware sync/FIFO/IRQ behavior.
