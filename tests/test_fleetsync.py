@@ -65,6 +65,23 @@ class FleetSyncTests(unittest.TestCase):
                 repaired = fleetsync._fs2_ecc_repair(codeword ^ (1 << bit_position))
                 self.assertEqual(repaired, codeword)
 
+    def test_legacy_sync_form(self):
+        frame = bits(0xAAAA, 16) + bits(0x23EB, 16) + [0, 0, 0, 0] + bits(0xFE800830, 32) + bits(0x53059B6C, 32)
+        result = fleetsync.decode({"all_bits": frame, "baud": 1200})
+        self.assertIn("Fleet: 107", result["value"])
+        self.assertIn("legacy 23EB", result["debug"])
+
+    def test_sync_tolerates_documented_bit_errors(self):
+        frame = valid_fs1_frame()
+        frame[1] ^= 1
+        frame[5] ^= 1
+        frame[12] ^= 1
+        frame[24 + 5] ^= 1
+        result = fleetsync.decode({"all_bits": frame, "baud": 1200})
+        self.assertIn("Fleet: 107", result["value"])
+        self.assertIn("Preamble errors: 3", result["debug"])
+        self.assertIn("Sync errors: 1", result["debug"])
+
     def test_inverted_input_polarity(self):
         frame = [b ^ 1 for b in valid_fs1_frame()]
         result = fleetsync.decode({"all_bits": frame, "baud": 1200})
