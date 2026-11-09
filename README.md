@@ -22,6 +22,36 @@ A protocol decoder is included at `decoders/mdc1200.py`. It follows the implemen
 
 A successful result is labelled **MDC1200 PACKET VALID**. A sync match without a passing FEC/CRC is not reported as a valid packet. The analyzer's data-start estimate can be several symbols later than the actual MDC sync, so the decoder intentionally reads `all_bits` rather than only `bits`. This is an audio-side decoder; it does not emulate BK4819 hardware sync/FIFO/IRQ behavior.
 
+## FleetSync decoder
+
+A separate implementation is included at `decoders/fleetsync.py`. It is independent of the MDC1200 plugin and does not import or modify it.
+
+- Searches the complete symbol stream, including the preamble, and tries both bit polarities.
+- Detects the alternating preamble and FleetSync sync patterns, including the 24-bit preamble / `0xA23E` form and legacy `0x23EB` / `0x052B` sync forms.
+- Validates FleetSync I using the bit-serial `0x6815` block check and parity.
+- Decodes FleetSync II's 16 nibble codewords, repairs single-bit errors, then validates the reconstructed block check.
+- Reports the 3-digit fleet number, 4-digit unit number, raw words, and validation diagnostics.
+- Accepts analyzer symbol streams configured for 1200 or 2400 baud.
+
+Keep the full PTT burst in the analysis and select **FleetSync – ANI + block check + FS-II ECC** in the Decoder list. The current plugin focuses on ANI (fleet/unit identity); it does not yet interpret every FleetSync status, text, GPS, or transparent-data message type. A frame is only labelled valid when its block check passes.
+
+### FleetSync tests
+
+Run the protocol tests with:
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+The tests use synthetic frames, including the published Fleet 107 / Unit 1772 example, and exercise all 15 single-bit correction positions. Real WAV captures are still needed to validate the analyzer's tone slicing and timing against your radio recordings.
+
+### Protocol references
+
+- [KENWOOD glossary – FleetSync uses MSK](https://comms.kenwood.com/en/support/glossary/)
+- [KENWOOD TK-2180/TK-3180 function reference – fleet and unit ID format, 1200/2400 baud](https://www.repeater-builder.com/kenwood/pdfs/tk-7180-8180-function-reference.pdf)
+- [FleetSync frame and ANI field analysis](https://gophertrunk.org/blog/deep-dives/beyond-voice-04-fleetsync-wav-that-lied/)
+- [russinnes/fsync-mdc1200-decode](https://github.com/russinnes/fsync-mdc1200-decode) was consulted as a protocol cross-reference; no C source files were copied into this plugin.
+
 ## Decoder plugin interface
 
 A plugin is a Python file in the `decoders` folder that defines `decode(ctx)`. It receives the context documented in `tmid_analyzer.py` and returns a string, a `(value, debug)` pair, or a dictionary with `value` and `debug`.
