@@ -169,10 +169,10 @@ def _parse_words(word1, word2, variant, extra=None):
     fleet = raw[2] + 99
     unit = ((raw[3] << 4) | (raw[4] >> 4)) + 999
     value = (
-        f"FleetSync {variant} ANI\\n"
-        f"Fleet: {fleet:03d}\\n"
-        f"Unit: {unit:04d}\\n"
-        "Block check: VALID\\n"
+        f"FleetSync {variant} ANI\n"
+        f"Fleet: {fleet:03d}\n"
+        f"Unit: {unit:04d}\n"
+        "Block check: VALID\n"
         f"Raw words: {word1:08X} {word2:08X}"
     )
     debug = [
@@ -185,7 +185,7 @@ def _parse_words(word1, word2, variant, extra=None):
     ]
     if extra:
         debug.extend(extra)
-    return {"value": value, "debug": "\\n".join(debug)}
+    return {"value": value, "debug": "\n".join(debug)}
 
 
 def decode(ctx):
@@ -207,7 +207,7 @@ def decode(ctx):
             "debug": (
                 f"Searched {len(bits)} sliced symbols at {baud:g} baud. Tried both bit polarities, "
                 "24-bit alternating preamble + 0xA23E, and the 16-bit alternating preamble "
-                "with legacy sync words 0x23EB / 0x052B. Limits: 3 preamble errors, 1 sync error.\\n"
+                "with legacy sync words 0x23EB / 0x052B. Limits: 3 preamble errors, 1 sync error.\n"
                 "Check that the full PTT burst is included, the detected tones are correct "
                 "(normally 1200/1800 Hz), and the symbol timing / bit mapping is reasonable."
             ),
@@ -246,7 +246,7 @@ def decode(ctx):
                 f"Calculated check: {calculated:04X}; received: {received:04X}",
                 "FleetSync I validation: PASS",
             ])
-            result["debug"] = "\\n".join(report + [result["debug"]])
+            result["debug"] = "\n".join(report + [result["debug"]])
             return result
 
         if len(available) >= _FS2_BITS:
@@ -261,14 +261,14 @@ def decode(ctx):
                     f"FS-II corrected codewords: {fs2_info['corrected_codewords']}",
                     "FleetSync II ECC + block check: PASS",
                 ])
-                result["debug"] = "\\n".join(report + [result["debug"]])
+                result["debug"] = "\n".join(report + [result["debug"]])
                 return result
 
     best = candidates[0]
     available = max(0, len(bits) - best["payload_start"])
     return {
         "value": "FleetSync sync found, but no frame passed validation",
-        "debug": "\\n".join(report + [
+        "debug": "\n".join(report + [
             f"Bits after best sync: {available}",
             f"FleetSync I requires {_FS1_BITS} post-sync bits; FleetSync II requires {_FS2_BITS}.",
             "The FleetSync I block check did not validate. FleetSync II was attempted when enough bits were present; its ECC or reconstructed block check did not validate.",
