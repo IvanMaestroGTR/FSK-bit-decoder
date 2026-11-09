@@ -2,56 +2,66 @@
 
 Bit-by-bit FSK analysis from PCM WAV recordings, with a plugin interface for protocol decoders.
 
-## MDC1200 decoder
+## How to use
 
-A protocol decoder is included at `decoders/mdc1200.py`. It follows the implementation in [TrueMDC UV-K5 firmware](https://github.com/IvanMaestroGTR/TrueMDC-9M2RTX-UVK5-Firmware):
+### Requirements
 
-- Differential bit recovery and 40-bit MDC sync search (`07 09 2A 44 6F`)
-- Both sync polarities and both analyzer input bit mappings
-- 112-bit encoded payload extraction
-- 7-byte data + 7-byte rate-1/2, K=7 FEC decoding
-- De-interleaving, firmware-style error correction, and an emulation of the DP32G030 hardware CRC configuration used by the firmware
-- Reports opcode, argument, and 16-bit unit ID only when the packet CRC validates
+- Python 3
+- Tkinter (included with the standard Python installer on Windows and macOS; on Debian/Ubuntu install it with `sudo apt install python3-tk`)
 
-### Install / use
+The analyzer uses Python's standard library. No `pip install` command or third-party Python packages are required.
 
-1. Copy `decoders/mdc1200.py` into the `decoders` folder beside `tmid_analyzer.py`.
-2. Open the WAV in FSK-bit-decoder. Frequency mode now defaults to Auto and estimates two recurring tones from overlapping 20 ms windows. For MDC1200 and FleetSync, expect the standard 1200/1800 Hz pair; Bell 202 commonly uses 1200/2200 Hz. Confirm the detected pair in the settings before decoding. Select Manual only when you need to override the estimates.
-3. Keep the full recording in the analysis. The decoder searches the complete symbol stream; the analyzer’s data-start estimate is only a visual guide and does not trim the bits passed to the decoder.
-4. Click **Analyze**, then choose **MDC1200 – sync + FEC + CRC** in the Decoder list.
+### Run
 
-A successful result is labelled **MDC1200 PACKET VALID**. A sync match without a passing FEC/CRC is not reported as a valid packet. The analyzer's data-start estimate can be several symbols later than the actual MDC sync, so the decoder intentionally reads `all_bits` rather than only `bits`. This is an audio-side decoder; it does not emulate BK4819 hardware sync/FIFO/IRQ behavior.
-
-## FleetSync decoder
-
-A separate implementation is included at `decoders/fleetsync.py`. It is independent of the MDC1200 plugin and does not import or modify it.
-
-- Searches the complete symbol stream, including the preamble, and tries both bit polarities.
-- Detects the 32-bit sync words `0xAAAA23EB` and `0xAAAA052B`, allowing up to two bit errors.
-- Validates FleetSync I using its bit-serial block check and parity.
-- Decodes FleetSync II's 16 nibble codewords across four 64-bit blocks, repairs single-bit errors, then validates the reconstructed block check.
-- Reports the 3-digit fleet number, 4-digit unit number, raw words, and validation diagnostics.
-- Accepts analyzer symbol streams configured for 1200 or 2400 baud.
-
-Keep the full PTT burst in the analysis and select **FleetSync – ANI + block check + FS-II ECC** in the Decoder list. The current plugin focuses on ANI (fleet/unit identity); it does not yet interpret every FleetSync status, text, GPS, or transparent-data message type. A frame is only labelled valid when its block check passes.
-
-### FleetSync tests
-
-Run the protocol tests with:
+Open a terminal in the project folder and run:
 
 ```sh
-python -m unittest discover -s tests -v
+python tmid_analyzer.py
 ```
 
-The tests use synthetic Fleet 107 / Unit 1772 frames and exercise all 15 single-bit correction positions. Real WAV captures are still needed to validate the analyzer's tone slicing and timing against your radio recordings.
+On systems where Python 3 is invoked as `python3`, use:
 
-### Protocol references
+```sh
+python3 tmid_analyzer.py
+```
 
-- [KENWOOD glossary – FleetSync uses MSK](https://comms.kenwood.com/en/support/glossary/)
-- [KENWOOD TK-2180/TK-3180 function reference – fleet and unit ID format, 1200/2400 baud](https://www.repeater-builder.com/kenwood/pdfs/tk-7180-8180-function-reference.pdf)
-- [FleetSync frame and ANI field analysis](https://gophertrunk.org/blog/deep-dives/beyond-voice-04-fleetsync-wav-that-lied/)
-- [russinnes/fsync-mdc1200-decode](https://github.com/russinnes/fsync-mdc1200-decode) provides an additional implementation reference.
+1. Click **Open PCM WAV…** and select your recording.
+2. Check the Mark, Space, and Baud settings. Frequency mode defaults to Auto; for MDC1200 and FleetSync, the expected pair is 1200/1800 Hz. Bell 202 commonly uses 1200/2200 Hz.
+3. Keep the full transmission in the recording. The decoder searches the complete symbol stream; the data-start estimate is only a visual guide and does not trim the bits passed to the decoder.
+4. Click **Analyze**, then choose the required decoder from the Decoder list.
+
+## Included decoders
+
+### MDC1200
+
+The plugin at `decoders/mdc1200.py` follows the implementation in the [TrueMDC UV-K5 firmware](https://github.com/IvanMaestroGTR/TrueMDC-9M2RTX-UVK5-Firmware).
+
+- Differential bit recovery and 40-bit MDC sync search.
+- Both sync polarities and both analyzer input bit mappings.
+- 112-bit encoded payload extraction.
+- FEC decoding, de-interleaving, error correction, and firmware-compatible CRC validation.
+- Reports opcode, argument, and 16-bit unit ID only when the packet CRC validates.
+
+Select **MDC1200 – sync + FEC + CRC** in the Decoder list.
+
+### FleetSync
+
+The plugin at `decoders/fleetsync.py` independently handles FleetSync I and II ANI decoding.
+
+- Searches the complete symbol stream, including the preamble, and tries both bit polarities.
+- Detects the supported sync words.
+- Validates FleetSync I block check and parity.
+- Handles FleetSync II nibble codewords and single-bit correction.
+- Reports the fleet number, unit number, raw words, and validation diagnostics.
+
+Select **FleetSync – ANI + block check + FS-II ECC** in the Decoder list. Keep the full PTT burst in the analysis.
+
+The current FleetSync plugin focuses on ANI (fleet/unit identity); it does not interpret every FleetSync status, text, GPS, or transparent-data message type.
 
 ## Decoder plugin interface
 
-A plugin is a Python file in the `decoders` folder that defines `decode(ctx)`. It receives the context documented in `tmid_analyzer.py` and returns a string, a `(value, debug)` pair, or a dictionary with `value` and `debug`.
+A decoder is a Python file in the `decoders` folder that defines `decode(ctx)`. It receives the context documented in `tmid_analyzer.py` and returns a string, a `(value, debug)` pair, or a dictionary containing `value` and `debug`.
+
+## Protocol reference
+
+- [russinnes/fsync-mdc1200-decode](https://github.com/russinnes/fsync-mdc1200-decode)
