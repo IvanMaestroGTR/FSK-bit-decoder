@@ -113,9 +113,12 @@ def _find_sync(bits):
 
 
 def decode(ctx):
-    raw = list(ctx.get("bits", []))
+    # MDC sync may begin before the analyzer's estimated data_start index.
+    # Always search the complete symbol stream first; use data-only bits only
+    # as a fallback for older plugin hosts that do not provide all_bits.
+    raw = list(ctx.get("all_bits") or ctx.get("bits", []))
     if not raw:
-        return {"value": "No data bits supplied.", "debug": "Select the full recording (include warble/preamble) and run analysis."}
+        return {"value": "No data bits supplied.", "debug": "Select the full recording and keep preamble display enabled. Sync search uses all symbols, including symbols before the estimated data start."}
 
     candidates = _find_sync(raw)
     if not candidates:
@@ -126,7 +129,7 @@ def decode(ctx):
                       "and up to 2 sync-bit errors.\n"
                       f"Input bits searched: {len(raw)}.\n"
                       "Ensure the analyzer includes the entire transmission and "
-                      "that Mark/Space and baud are configured correctly.")
+                      "that Mark/Space and baud are configured correctly. The estimated data-start marker is not used to trim MDC input.")
         }
 
     lines = [
