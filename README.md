@@ -27,9 +27,9 @@ A successful result is labelled **MDC1200 PACKET VALID**. A sync match without a
 A separate implementation is included at `decoders/fleetsync.py`. It is independent of the MDC1200 plugin and does not import or modify it.
 
 - Searches the complete symbol stream, including the preamble, and tries both bit polarities.
-- Detects the alternating preamble and FleetSync sync patterns, including the 24-bit preamble / `0xA23E` form and legacy `0x23EB` / `0x052B` sync forms.
-- Validates FleetSync I using the bit-serial `0x6815` block check and parity.
-- Decodes FleetSync II's 16 nibble codewords, repairs single-bit errors, then validates the reconstructed block check.
+- Detects the 32-bit sync words `0xAAAA23EB` and `0xAAAA052B`, allowing up to two bit errors.
+- Validates FleetSync I using its bit-serial block check and parity.
+- Decodes FleetSync II's 16 nibble codewords across four 64-bit blocks, repairs single-bit errors, then validates the reconstructed block check.
 - Reports the 3-digit fleet number, 4-digit unit number, raw words, and validation diagnostics.
 - Accepts analyzer symbol streams configured for 1200 or 2400 baud.
 
@@ -50,7 +50,7 @@ The tests use synthetic frames, including the published Fleet 107 / Unit 1772 ex
 - [KENWOOD glossary – FleetSync uses MSK](https://comms.kenwood.com/en/support/glossary/)
 - [KENWOOD TK-2180/TK-3180 function reference – fleet and unit ID format, 1200/2400 baud](https://www.repeater-builder.com/kenwood/pdfs/tk-7180-8180-function-reference.pdf)
 - [FleetSync frame and ANI field analysis](https://gophertrunk.org/blog/deep-dives/beyond-voice-04-fleetsync-wav-that-lied/)
-- [russinnes/fsync-mdc1200-decode](https://github.com/russinnes/fsync-mdc1200-decode) was consulted as a protocol cross-reference; no C source files were copied into this plugin.
+- [russinnes/fsync-mdc1200-decode](https://github.com/russinnes/fsync-mdc1200-decode) provides an additional implementation reference.
 
 ## Decoder plugin interface
 
