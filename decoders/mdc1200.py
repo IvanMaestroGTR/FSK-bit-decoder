@@ -1,7 +1,7 @@
 """MDC1200 decoder for the FSK-bit-decoder plugin interface.
 
 Implements the same sync, differential bit recovery, de-interleaving,
-K=7 rate-1/2 error correction, and CRC-16/XMODEM validation used by
+K=7 rate-1/2 error correction, and firmware-compatible CRC validation used by
 IvanMaestroGTR/TrueMDC-9M2RTX-UVK5-Firmware.
 """
 NAME = "MDC1200 – sync + FEC + CRC"
