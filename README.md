@@ -43,7 +43,7 @@ Run the protocol tests with:
 python -m unittest discover -s tests -v
 ```
 
-The tests use synthetic frames, including the published Fleet 107 / Unit 1772 example, and exercise all 15 single-bit correction positions. Real WAV captures are still needed to validate the analyzer's tone slicing and timing against your radio recordings.
+The tests use synthetic Fleet 107 / Unit 1772 frames and exercise all 15 single-bit correction positions. Real WAV captures are still needed to validate the analyzer's tone slicing and timing against your radio recordings.
 
 ### Protocol references
 
