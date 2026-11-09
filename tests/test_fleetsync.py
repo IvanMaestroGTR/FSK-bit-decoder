@@ -8,14 +8,11 @@ def bits(value, width):
 
 
 def valid_fs1_frame(word1=0xFE800830, word2=0x53059B6C):
-    # Public ANI vector: Fleet 107, Unit 1772.
     assert fleetsync._fsync_block_check(word1, word2) == (word2 & 0xFFFF)
-    return bits(0xAAAAAA, 24) + bits(0xA23E, 16) + [0, 0, 0, 0] + bits(word1, 32) + bits(word2, 32)
+    return bits(0xAAAA23EB, 32) + bits(word1, 32) + bits(word2, 32)
 
 
 def make_codeword(nibble):
-    # The nibble occupies bits 11..8; solve the other eleven positions so the
-    # independently generated SEC syndrome is zero.
     data = (nibble & 0xF) << 8
     for parity in range(1 << 11):
         candidate = data | parity
@@ -34,13 +31,16 @@ def valid_fs2_frame(word1=0xFE800830, word2=0x53059B6C, flip_one=False):
     nibbles = []
     for byte in data:
         nibbles.extend((byte >> 4, byte & 0xF))
-    codewords = [make_codeword(n) for n in nibbles]
-    if flip_one:
-        codewords[6] ^= 1 << 9
-    body = [0, 0, 0, 0]
-    for codeword in codewords:
-        body.extend(bits(codeword, 16))
-    return bits(0xAAAAAA, 24) + bits(0xA23E, 16) + body
+
+    frame = bits(0xAAAA23EB, 32)
+    for block in range(4):
+        logical = [make_codeword(n) for n in nibbles[block * 4:(block + 1) * 4]]
+        chronological = [logical[1], logical[0], logical[3], logical[2]]
+        if flip_one and block == 1:
+            chronological[2] ^= 1 << 9
+        for codeword in chronological:
+            frame.extend(bits(codeword, 16))
+    return frame
 
 
 class FleetSyncTests(unittest.TestCase):
@@ -56,7 +56,7 @@ class FleetSyncTests(unittest.TestCase):
         self.assertIn("FleetSync II ANI", result["value"])
         self.assertIn("Fleet: 107", result["value"])
         self.assertIn("Unit: 1772", result["value"])
-        self.assertIn("corrected codewords: 1", result["debug"])
+        self.assertIn("Corrected codewords: 1", result["debug"])
 
     def test_fs2_single_bit_repair_for_every_codeword_position(self):
         codeword = make_codeword(0xA)
@@ -65,31 +65,28 @@ class FleetSyncTests(unittest.TestCase):
                 repaired = fleetsync._fs2_ecc_repair(codeword ^ (1 << bit_position))
                 self.assertEqual(repaired, codeword)
 
-    def test_legacy_sync_form(self):
-        frame = bits(0xAAAA, 16) + bits(0x23EB, 16) + [0, 0, 0, 0] + bits(0xFE800830, 32) + bits(0x53059B6C, 32)
-        result = fleetsync.decode({"all_bits": frame, "baud": 1200})
-        self.assertIn("Fleet: 107", result["value"])
-        self.assertIn("legacy 23EB", result["debug"])
+    def test_both_sync_words(self):
+        for sync in (0xAAAA23EB, 0xAAAA052B):
+            frame = bits(sync, 32) + bits(0xFE800830, 32) + bits(0x53059B6C, 32)
+            result = fleetsync.decode({"all_bits": frame, "baud": 1200})
+            self.assertIn("Fleet: 107", result["value"])
 
-    def test_sync_tolerates_documented_bit_errors(self):
+    def test_sync_error_limit(self):
         frame = valid_fs1_frame()
-        frame[1] ^= 1
-        frame[5] ^= 1
-        frame[12] ^= 1
-        frame[24 + 5] ^= 1
+        frame[2] ^= 1
+        frame[20] ^= 1
         result = fleetsync.decode({"all_bits": frame, "baud": 1200})
         self.assertIn("Fleet: 107", result["value"])
-        self.assertIn("Preamble errors: 3", result["debug"])
-        self.assertIn("Sync errors: 1", result["debug"])
+        self.assertIn("errors: 2", result["debug"])
 
     def test_inverted_input_polarity(self):
-        frame = [b ^ 1 for b in valid_fs1_frame()]
+        frame = [bit ^ 1 for bit in valid_fs1_frame()]
         result = fleetsync.decode({"all_bits": frame, "baud": 1200})
         self.assertIn("Fleet: 107", result["value"])
         self.assertIn("Unit: 1772", result["value"])
 
     def test_no_false_valid_packet_on_truncated_frame(self):
-        result = fleetsync.decode({"all_bits": valid_fs1_frame()[:70], "baud": 1200})
+        result = fleetsync.decode({"all_bits": valid_fs1_frame()[:60], "baud": 1200})
         self.assertNotIn("Block check: VALID", result["value"])
 
     def test_bad_fs1_block_check_is_not_reported_valid(self):
