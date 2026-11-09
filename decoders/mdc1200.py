@@ -11,13 +11,27 @@ SYNC_BITS = tuple((b >> shift) & 1 for b in SYNC for shift in range(7, -1, -1))
 PAYLOAD_BITS = 14 * 8
 
 
-def _crc16_xmodem(data):
+def _crc16_firmware(data):
+    # Emulate compute_crc() in driver/crc.c on the DP32G030:
+    # input bytes are bit-reversed, then the CRC-16/CCITT result is
+    # bit-reversed and complemented by the hardware output configuration.
+    def reverse8(value):
+        value = ((value & 0x55) << 1) | ((value >> 1) & 0x55)
+        value = ((value & 0x33) << 2) | ((value >> 2) & 0x33)
+        return ((value & 0x0F) << 4) | ((value >> 4) & 0x0F)
+
+    def reverse16(value):
+        value = ((value & 0x5555) << 1) | ((value >> 1) & 0x5555)
+        value = ((value & 0x3333) << 2) | ((value >> 2) & 0x3333)
+        value = ((value & 0x0F0F) << 4) | ((value >> 4) & 0x0F0F)
+        return ((value & 0x00FF) << 8) | ((value >> 8) & 0x00FF)
+
     crc = 0
     for byte in data:
-        crc ^= byte << 8
+        crc ^= reverse8(byte) << 8
         for _ in range(8):
             crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
-    return crc
+    return reverse16(crc) ^ 0xFFFF
 
 
 def _bytes_msb(bits):
@@ -84,7 +98,7 @@ def _decode_fec(encoded):
         corrected = _error_correct(candidate)
         payload = corrected[:7]
         received_crc = corrected[4] | (corrected[5] << 8)
-        calculated_crc = _crc16_xmodem(payload[:4])
+        calculated_crc = _crc16_firmware(payload[:4])
         if received_crc == calculated_crc:
             return corrected, received_crc, calculated_crc, bit_to_flip
     return None, None, None, None
@@ -160,7 +174,7 @@ def decode(ctx):
             f"Opcode: 0x{op:02X}\n"
             f"Argument: 0x{arg:02X}\n"
             f"Unit ID: {unit_id:04X} ({unit_id})\n"
-            f"CRC: {received_crc:04X} (CRC-16/XMODEM: {calculated_crc:04X})"
+            f"CRC: {received_crc:04X} (firmware CRC: {calculated_crc:04X})"
         )
         debug = "\n".join(lines + [
             f"Selected sync offset: {start}",
@@ -170,7 +184,7 @@ def decode(ctx):
             f"Encoded payload length: {len(encoded) * 8} bits",
             f"FEC: passed; residual single-bit retry: {'none' if flipped is None else 'coded bit ' + str(flipped)}",
             "Decoded bytes: " + " ".join(f"{b:02X}" for b in corrected[:7]),
-            "CRC validation: PASS"
+            "Firmware CRC validation: PASS"
         ])
         return {"value": value, "debug": debug}
 
