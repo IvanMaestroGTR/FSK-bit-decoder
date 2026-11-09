@@ -34,24 +34,45 @@ def goertzel(x,rate,freq):
     return max(0.0,s1*s1+s2*s2-coeff*s1*s2)/(norm+1e-15)
 
 def auto_pair(samples,rate):
-    # Estimate the two dominant FSK tones from a short set of overlapping audio windows.
-    n=min(len(samples),int(rate*0.35)); x=samples[:n]
-    if n<64: raise ValueError("Recording is too short for automatic tone detection")
-    # Coarse sweep first, then refine around the two strongest separated peaks.
-    scores=[]
-    for f in range(500,3001,10): scores.append((goertzel(x,rate,f),f))
-    peaks=[]
-    for i in range(1,len(scores)-1):
-        if scores[i][0]>=scores[i-1][0] and scores[i][0]>=scores[i+1][0]:
-            peaks.append(scores[i])
-    peaks.sort(reverse=True)
+    """Find two recurring FSK tones from short overlapping windows, not whole-file energy."""
+    if len(samples)<max(64,int(rate*0.025)):
+        raise ValueError("Recording is too short for automatic tone detection")
+    win=max(64,int(rate*0.020))       # 20 ms: enough cycles to separate common radio FSK pairs
+    hop=max(1,win//2)
+    freqs=range(600,3001,10)
+    votes={}
+    windows=0
+    for start in range(0,max(1,len(samples)-win+1),hop):
+        x=samples[start:start+win]
+        if len(x)<win: break
+        # Remove window DC and edge leakage before measuring candidate tones.
+        mean=sum(x)/len(x)
+        x=[(v-mean)*(0.5-0.5*math.cos(2*math.pi*i/(len(x)-1))) for i,v in enumerate(x)]
+        spectrum=[(goertzel(x,rate,f),f) for f in freqs]
+        spectrum.sort(reverse=True)
+        if not spectrum or spectrum[0][0]<=1e-10: continue
+        peak=spectrum[0][0]
+        selected=[]
+        for power,f in spectrum:
+            if power < peak*0.30: break
+            if all(abs(f-g)>=180 for g in selected):
+                selected.append(f)
+            if len(selected)==2: break
+        for f in selected:
+            # Vote per window so a long constant preamble cannot swamp the data tones.
+            bucket=int(round(f/20.0))*20
+            votes[bucket]=votes.get(bucket,0)+1
+        windows+=1
+    ranked=sorted(votes.items(),key=lambda item:item[1],reverse=True)
     chosen=[]
-    for score,f in peaks:
-        if all(abs(f-g)>=180 for _,g in chosen):
-            chosen.append((score,f))
+    for f,count in ranked:
+        if count < max(2,int(windows*0.04)): continue
+        if all(abs(f-g)>=180 for g,_ in chosen):
+            chosen.append((f,count))
         if len(chosen)==2: break
-    if len(chosen)<2: raise ValueError("Could not confidently identify two separate tones. Enter Mark and Space manually.")
-    fs=sorted(f for _,f in chosen)
+    if len(chosen)<2:
+        raise ValueError("Auto detection could not find two recurring tones. Try selecting only the data burst or enter Mark and Space manually.")
+    fs=sorted(f for f,_ in chosen)
     return fs[0],fs[1]
 
 # ---------------------------------------------------------------------------
@@ -248,7 +269,7 @@ class App(tk.Tk):
         rc.pack(side="left");rc.bind("<<ComboboxSelected>>",self._rate_changed)
         self.file_label=ttk.Label(bar,text="No recording loaded");self.file_label.pack(side="left",padx=10)
         cfg=ttk.LabelFrame(self,text="Signal settings",padding=8);cfg.pack(fill="x",padx=8,pady=4)
-        self.mode=tk.StringVar(value="Manual");self.mark=tk.StringVar(value="1200");self.space=tk.StringVar(value="2200")
+        self.mode=tk.StringVar(value="Auto");self.mark=tk.StringVar(value="1200");self.space=tk.StringVar(value="1800")
         self.baud=tk.StringVar(value="1200");self.offset=tk.StringVar(value="0");self.window=tk.StringVar(value="100");self.endms=tk.StringVar(value="")
         self.thrmode=tk.StringVar(value="Auto");self.keep_pre=tk.BooleanVar(value=True);self.data_start_ms=None;self.equalize=tk.BooleanVar(value=True)
         self.polarity=tk.StringVar(value="Mark=0");self.finalstop=tk.BooleanVar(value=False)
