@@ -45,9 +45,6 @@ def auto_pair(samples,rate):
     for start in range(0,max(1,len(samples)-win+1),hop):
         x=samples[start:start+win]
         if len(x)<win: break
-        # Remove window DC and edge leakage before measuring candidate tones.
-        mean=sum(x)/len(x)
-        x=[(v-mean)*(0.5-0.5*math.cos(2*math.pi*i/(len(x)-1))) for i,v in enumerate(x)]
         spectrum=[(goertzel(x,rate,f),f) for f in freqs]
         spectrum.sort(reverse=True)
         if not spectrum or spectrum[0][0]<=1e-10: continue
@@ -75,18 +72,7 @@ def auto_pair(samples,rate):
     fs=sorted(f for f,_ in chosen)
     return fs[0],fs[1]
 
-# ---------------------------------------------------------------------------
-# Demodulator core (replaces the old per-symbol Hann-window Goertzel decision)
-#
-# Why the old version gave low confidence:
-#  * A Hann window over 70% of one 1200-baud symbol is ~0.6 ms long -> only ~1.7 kHz
-#    frequency resolution, so 1200 Hz and 2200 Hz (1 kHz apart) smear into each other.
-#  * Mark and Space were compared by raw energy, but real recordings (radio audio
-#    pre/de-emphasis) have very different amplitudes per tone (here 1200 Hz is ~2.7x
-#    stronger than 2200 Hz), so the stronger tone "wins" regardless of the data.
-#  * Decision threshold was fixed at "mark >= space", with no adaptation.
-#  * Symbol timing started at 0 ms (inside the warble) and never synchronised to the data.
-# ---------------------------------------------------------------------------
+# Signal processing
 def tone_prefix(x,rate,freq):
     """Running complex sum of x[n]*exp(-j*w*n): any window's tone magnitude is O(1)."""
     n=len(x); w=-2*math.pi*freq/rate
@@ -252,10 +238,10 @@ RATES=[8000,11025,16000,22050,32000,44100,48000,88200,96000,176400,192000,384000
 class App(tk.Tk):
     def __init__(self):
         super().__init__();self.title("TMID / FSK Bit & Preamble Analyzer");sw,sh=self.winfo_screenwidth(),self.winfo_screenheight()
-        w0,h0=min(1280,sw-40),min(900,sh-110)   # fit the screen (leaves room for title bar + taskbar)
+        w0,h0=min(1280,sw-40),min(900,sh-110)
         self.geometry(f"{w0}x{h0}+{max(0,(sw-w0)//2)}+10");self.minsize(min(900,w0),min(520,h0))
         self.samples=None;self.rate=None;self.path=None;self.rows=[];self.results=[];self.meta={}
-        self.rate_sel=tk.StringVar(value="Auto (from file)")   # must exist before _ui builds the dropdown
+        self.rate_sel=tk.StringVar(value="Auto (from file)")
         self.file_rate=None
         self.decoders=[]
         self._ui()
@@ -324,7 +310,6 @@ class App(tk.Tk):
             f=ttk.Frame(self.nb);t=tk.Text(f,height=7,wrap="word",font=("Consolas",9));sb=ttk.Scrollbar(f,orient="vertical",command=t.yview)
             t.configure(yscrollcommand=sb.set);t.pack(side="left",fill="both",expand=True);sb.pack(side="right",fill="y");self.nb.add(f,text=title);return t
         self.val_text=tab("Decoded value");self.dbg_text=tab("Debug");self.report=tab("Full log")
-        # pack order: bottom widgets first (bottom-most first), then the expanding plot area, so nothing is clipped
         self.nb.pack(side="bottom",fill="x",padx=8,pady=(2,8));dbar.pack_forget();dbar.pack(side="bottom",fill="x")
         foot.pack_forget();foot.pack(side="bottom",fill="x");split.pack_forget();split.pack(fill="both",expand=True,padx=8,pady=4)
 
@@ -466,11 +451,11 @@ class App(tk.Tk):
     @staticmethod
     def _load_module(path):
         spec=importlib.util.spec_from_file_location("tmid_dec_"+str(abs(hash(path))),path)
-        mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)   # fresh execution each time = real reload
+        mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
         if not callable(getattr(mod,"decode",None)):raise ValueError("Module has no decode(ctx) function.")
         return str(getattr(mod,"NAME",os.path.splitext(os.path.basename(path))[0])),mod.decode
 
-    def scan_decoders(self,keep_path=None,keep_label=None):
+    def scan_decoders(self,keep_path=None):
         entries=[{"label":"TMID – built-in (UART 8-N-1 + CRC16 hypothesis)","func":builtin_decode,"path":None,"error":None}]
         d=self.decoders_dir()
         try:os.makedirs(d,exist_ok=True);files=sorted(f for f in os.listdir(d) if f.lower().endswith(".py") and not f.startswith("_"))
