@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""TMID / FSK audio analyzer. Python 3 + Tkinter only."""
+"""TMID / FSK bit analyzer. Python 3 + Tkinter only."""
 import csv, math, os, shutil, struct, subprocess, sys, wave, importlib.util, traceback
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 def load_wav(path):
     with wave.open(path, "rb") as w:
+        if w.getcomptype() != "NONE":
+            raise ValueError("Only uncompressed PCM WAV files are supported")
         ch, width, rate, count = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
         raw = w.readframes(count)
     if width == 1: vals = [(v-128)/128.0 for v in raw]
@@ -34,38 +36,45 @@ def goertzel(x,rate,freq):
     return max(0.0,s1*s1+s2*s2-coeff*s1*s2)/(norm+1e-15)
 
 def auto_pair(samples,rate):
-    # Estimate the two dominant FSK tones from a short set of overlapping audio windows.
-    n=min(len(samples),int(rate*0.35)); x=samples[:n]
-    if n<64: raise ValueError("Recording is too short for automatic tone detection")
-    # Coarse sweep first, then refine around the two strongest separated peaks.
-    scores=[]
-    for f in range(500,3001,10): scores.append((goertzel(x,rate,f),f))
-    peaks=[]
-    for i in range(1,len(scores)-1):
-        if scores[i][0]>=scores[i-1][0] and scores[i][0]>=scores[i+1][0]:
-            peaks.append(scores[i])
-    peaks.sort(reverse=True)
+    """Find two recurring FSK tones from short overlapping windows, not whole-file energy."""
+    if len(samples)<max(64,int(rate*0.025)):
+        raise ValueError("Recording is too short for automatic tone detection")
+    win=max(64,int(rate*0.020))       # 20 ms: enough cycles to separate common radio FSK pairs
+    hop=max(1,win//2)
+    freqs=range(600,3001,10)
+    votes={}
+    windows=0
+    for start in range(0,max(1,len(samples)-win+1),hop):
+        x=samples[start:start+win]
+        if len(x)<win: break
+        spectrum=[(goertzel(x,rate,f),f) for f in freqs]
+        spectrum.sort(reverse=True)
+        if not spectrum or spectrum[0][0]<=1e-10: continue
+        peak=spectrum[0][0]
+        selected=[]
+        for power,f in spectrum:
+            if power < peak*0.30: break
+            if all(abs(f-g)>=180 for g in selected):
+                selected.append(f)
+            if len(selected)==2: break
+        for f in selected:
+            # Vote per window so a long constant preamble cannot swamp the data tones.
+            bucket=int(round(f/20.0))*20
+            votes[bucket]=votes.get(bucket,0)+1
+        windows+=1
+    ranked=sorted(votes.items(),key=lambda item:item[1],reverse=True)
     chosen=[]
-    for score,f in peaks:
-        if all(abs(f-g)>=180 for _,g in chosen):
-            chosen.append((score,f))
+    for f,count in ranked:
+        if count < max(2,int(windows*0.04)): continue
+        if all(abs(f-g)>=180 for g,_ in chosen):
+            chosen.append((f,count))
         if len(chosen)==2: break
-    if len(chosen)<2: raise ValueError("Could not confidently identify two separate tones. Enter Mark and Space manually.")
-    fs=sorted(f for _,f in chosen)
+    if len(chosen)<2:
+        raise ValueError("Auto detection could not find two recurring tones. Try selecting only the data burst or enter Mark and Space manually.")
+    fs=sorted(f for f,_ in chosen)
     return fs[0],fs[1]
 
-# ---------------------------------------------------------------------------
-# Demodulator core (replaces the old per-symbol Hann-window Goertzel decision)
-#
-# Why the old version gave low confidence:
-#  * A Hann window over 70% of one 1200-baud symbol is ~0.6 ms long -> only ~1.7 kHz
-#    frequency resolution, so 1200 Hz and 2200 Hz (1 kHz apart) smear into each other.
-#  * Mark and Space were compared by raw energy, but real recordings (radio audio
-#    pre/de-emphasis) have very different amplitudes per tone (here 1200 Hz is ~2.7x
-#    stronger than 2200 Hz), so the stronger tone "wins" regardless of the data.
-#  * Decision threshold was fixed at "mark >= space", with no adaptation.
-#  * Symbol timing started at 0 ms (inside the warble) and never synchronised to the data.
-# ---------------------------------------------------------------------------
+# Signal processing
 def tone_prefix(x,rate,freq):
     """Running complex sum of x[n]*exp(-j*w*n): any window's tone magnitude is O(1)."""
     n=len(x); w=-2*math.pi*freq/rate
@@ -130,7 +139,7 @@ def active_span(x,rate,rel=0.3):
     return idx[0]*win/rate,min(len(x),(idx[-1]+1)*win)/rate
 
 def find_data_start(pm,ps,rate,baud,am,asp,t0,t1,long_syms=12):
-    """End of the leading warble/long-tone train (runs >= long_syms symbols). Falls back to t0."""
+    """Estimate where the leading tone train ends; fall back to the signal start."""
     period=1/baud; hop=period/4; vals=[];times=[];t=t0
     while t+period<=t1:
         a=int(t*rate); b=int((t+period)*rate)
@@ -197,7 +206,7 @@ def uart_candidates(bits,final_stop):
 #   A decoder module is any .py file that defines   decode(ctx)   and optionally   NAME = "..."
 #   ctx keys:
 #     bits        list[int]  data bits only (from the detected data start; = all_bits if none found)
-#     all_bits    list[int]  every decoded symbol incl. warble/preamble
+#     all_bits    list[int]  complete decoded symbol stream
 #     preamble_bits list[int]
 #     data_idx    int        index in all_bits where data starts
 #     rows        per-symbol tuples (idx, time_ms, tone_hz, bit, confidence, mark_score, space_score)
@@ -230,11 +239,11 @@ RATES=[8000,11025,16000,22050,32000,44100,48000,88200,96000,176400,192000,384000
 
 class App(tk.Tk):
     def __init__(self):
-        super().__init__();self.title("TMID / FSK Bit & Preamble Analyzer");sw,sh=self.winfo_screenwidth(),self.winfo_screenheight()
-        w0,h0=min(1280,sw-40),min(900,sh-110)   # fit the screen (leaves room for title bar + taskbar)
+        super().__init__();self.title("TMID / FSK Bit Analyzer");sw,sh=self.winfo_screenwidth(),self.winfo_screenheight()
+        w0,h0=min(1280,sw-40),min(900,sh-110)
         self.geometry(f"{w0}x{h0}+{max(0,(sw-w0)//2)}+10");self.minsize(min(900,w0),min(520,h0))
         self.samples=None;self.rate=None;self.path=None;self.rows=[];self.results=[];self.meta={}
-        self.rate_sel=tk.StringVar(value="Auto (from file)")   # must exist before _ui builds the dropdown
+        self.rate_sel=tk.StringVar(value="Auto (from file)")
         self.file_rate=None
         self.decoders=[]
         self._ui()
@@ -248,9 +257,9 @@ class App(tk.Tk):
         rc.pack(side="left");rc.bind("<<ComboboxSelected>>",self._rate_changed)
         self.file_label=ttk.Label(bar,text="No recording loaded");self.file_label.pack(side="left",padx=10)
         cfg=ttk.LabelFrame(self,text="Signal settings",padding=8);cfg.pack(fill="x",padx=8,pady=4)
-        self.mode=tk.StringVar(value="Manual");self.mark=tk.StringVar(value="1200");self.space=tk.StringVar(value="2200")
+        self.mode=tk.StringVar(value="Auto");self.mark=tk.StringVar(value="1200");self.space=tk.StringVar(value="1800")
         self.baud=tk.StringVar(value="1200");self.offset=tk.StringVar(value="0");self.window=tk.StringVar(value="100");self.endms=tk.StringVar(value="")
-        self.thrmode=tk.StringVar(value="Auto");self.keep_pre=tk.BooleanVar(value=True);self.data_start_ms=None;self.equalize=tk.BooleanVar(value=True)
+        self.thrmode=tk.StringVar(value="Auto");self.data_start_ms=None;self.equalize=tk.BooleanVar(value=True)
         self.polarity=tk.StringVar(value="Mark=0");self.finalstop=tk.BooleanVar(value=False)
         fields=[("Frequency mode",self.mode,["Manual","Auto"]),("Mark (Hz)",self.mark,None),("Space (Hz)",self.space,None),
                 ("Baud",self.baud,None),("Start offset (ms)",self.offset,None),("Window (%)",self.window,None),("End (ms, blank=auto)",self.endms,None)]
@@ -265,10 +274,9 @@ class App(tk.Tk):
         ttk.Label(cfg,text="Threshold").grid(row=1,column=4,sticky="w")
         ttk.Combobox(cfg,textvariable=self.thrmode,values=["Auto","Zero"],state="readonly",width=9).grid(row=1,column=5,sticky="w")
         ttk.Checkbutton(cfg,text="Equalize tone levels",variable=self.equalize).grid(row=1,column=6,columnspan=2,sticky="w")
-        ttk.Checkbutton(cfg,text="Include warble/preamble",variable=self.keep_pre).grid(row=2,column=0,columnspan=3,sticky="w")
         ttk.Button(cfg,text="Auto-sync (find data start)",command=self.auto_sync).grid(row=1,column=9,columnspan=3,sticky="e",padx=6)
         ttk.Button(cfg,text="Analyze",command=self.analyze).grid(row=1,column=12,columnspan=2,sticky="e")
-        self.summary=ttk.Label(self,text="Load a WAV file. Warble/preamble is analyzed from the selected start offset.",padding=8);self.summary.pack(fill="x")
+        self.summary=ttk.Label(self,text="Load a WAV file. FSK symbols are analyzed from the detected signal start.",padding=8);self.summary.pack(fill="x")
         split=ttk.Panedwindow(self,orient="vertical");split.pack(fill="both",expand=True,padx=8,pady=4)
         top=ttk.Frame(split);bottom=ttk.Frame(split);split.add(top,weight=2);split.add(bottom,weight=3)
         wave_frame=ttk.Frame(top);wave_frame.pack(fill="both",expand=True)
@@ -303,7 +311,6 @@ class App(tk.Tk):
             f=ttk.Frame(self.nb);t=tk.Text(f,height=7,wrap="word",font=("Consolas",9));sb=ttk.Scrollbar(f,orient="vertical",command=t.yview)
             t.configure(yscrollcommand=sb.set);t.pack(side="left",fill="both",expand=True);sb.pack(side="right",fill="y");self.nb.add(f,text=title);return t
         self.val_text=tab("Decoded value");self.dbg_text=tab("Debug");self.report=tab("Full log")
-        # pack order: bottom widgets first (bottom-most first), then the expanding plot area, so nothing is clipped
         self.nb.pack(side="bottom",fill="x",padx=8,pady=(2,8));dbar.pack_forget();dbar.pack(side="bottom",fill="x")
         foot.pack_forget();foot.pack(side="bottom",fill="x");split.pack_forget();split.pack(fill="both",expand=True,padx=8,pady=4)
 
@@ -312,6 +319,7 @@ class App(tk.Tk):
         if not p:return
         try:
             self.samples,self.file_rate,ch,width,count=load_wav(p);self.rate=self.file_rate;self.path=p
+            self.data_start_ms=None;self.sync_note=""
             self.meta={"channels":ch,"sample_width_bytes":width,"frames":count}
             self._apply_rate();self._update_label()
             self.auto_sync()
@@ -351,14 +359,14 @@ class App(tk.Tk):
 
     def auto_sync(self):
         if self.samples is None:messagebox.showinfo("No WAV","Open a recording first.");return
+        self.data_start_ms=None;self.sync_note=""
         try:
             baud,offset,pct,mark,space,a0,a1=self._settings()
             pm,ps,am,asp=self._prep(mark,space,baud)
             approx=find_data_start(pm,ps,self.rate,baud,am,asp,a0,a1)
             best=refine_offset(pm,ps,self.rate,baud,am,asp,approx,a1,pct,self.equalize.get())
             start=best
-            if self.keep_pre.get():   # same symbol phase, but begin at the first sound so the warble/preamble is decoded too
-                period=1/baud;k=int(max(0,best-a0)//period);start=best-k*period
+            period=1/baud;k=int(max(0,best-a0)//period);start=best-k*period
             self.offset.set(f"{max(0,start)*1000:.3f}");self.data_start_ms=approx*1000
             self.sync_note=f"Auto-sync: signal starts {a0*1000:.2f} ms, data starts ≈ {approx*1000:.2f} ms, symbol phase from {best*1000:.3f} ms; analysis begins {start*1000:.3f} ms"
         except Exception as e:messagebox.showerror("Auto-sync",str(e));return
@@ -427,7 +435,7 @@ class App(tk.Tk):
     def draw(self,rows,mark,space):
         self.bit_canvas.delete("all");w=max(1,self.bit_canvas.winfo_width());h=max(1,self.bit_canvas.winfo_height())
         if not rows:return
-        self.bit_canvas.create_text(10,8,anchor="nw",fill="white",text="Symbol decisions from selected start offset (includes warble if offset starts at recording beginning)")
+        self.bit_canvas.create_text(10,8,anchor="nw",fill="white",text="FSK symbol decisions from the selected signal start")
         step=max(1,(w-30)/len(rows));top=30;usable=h-55
         for r in rows:
             x=15+r[0]*step;y=top if r[3]==0 else top+usable*.55;color="#40d6a2" if r[3]==0 else "#ffb454"
@@ -436,7 +444,7 @@ class App(tk.Tk):
         di=self.results.get("data_idx")
         if di is not None and 0<di<len(rows):
             xm=15+di*step;self.bit_canvas.create_line(xm,22,xm,h-4,fill="#ff5c5c",width=2,dash=(4,3))
-            self.bit_canvas.create_text(xm+4,h-10,anchor="w",fill="#ff9a9a",text=f"data starts (symbol {di}) — left of this line is warble/preamble")
+            self.bit_canvas.create_text(xm+4,h-10,anchor="w",fill="#ff9a9a",text=f"data starts (symbol {di}) — preceding symbols are the leading signal")
 
     # ----- decoder plugin handling (menu is built from the "decoders" folder next to this script)
     def decoders_dir(self):
@@ -445,11 +453,11 @@ class App(tk.Tk):
     @staticmethod
     def _load_module(path):
         spec=importlib.util.spec_from_file_location("tmid_dec_"+str(abs(hash(path))),path)
-        mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)   # fresh execution each time = real reload
+        mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
         if not callable(getattr(mod,"decode",None)):raise ValueError("Module has no decode(ctx) function.")
         return str(getattr(mod,"NAME",os.path.splitext(os.path.basename(path))[0])),mod.decode
 
-    def scan_decoders(self,keep_path=None,keep_label=None):
+    def scan_decoders(self,keep_path=None):
         entries=[{"label":"TMID – built-in (UART 8-N-1 + CRC16 hypothesis)","func":builtin_decode,"path":None,"error":None}]
         d=self.decoders_dir()
         try:os.makedirs(d,exist_ok=True);files=sorted(f for f in os.listdir(d) if f.lower().endswith(".py") and not f.startswith("_"))
@@ -512,7 +520,7 @@ class App(tk.Tk):
         lines=["TMID / FSK ANALYSIS LOG",f"Input: {self.path}",f"Sample rate: {self.rate} Hz",f"Channels: {self.meta.get('channels')}",f"Sample width: {self.meta.get('sample_width_bytes')} bytes",
                f"Duration: {len(self.samples)/self.rate:.6f} s",f"Mark: {z['mark']} Hz",f"Space: {z['space']} Hz",f"Baud: {z['baud']}",f"Start offset: {z['offset_ms']} ms",
                f"Analysis window: {z['window_pct']}%",f"Mapping: {self.polarity.get()}",f"Mean confidence: {avg:.4f}",f"Tone levels (mark/space amplitude): {z['levels'][0]:.4f} / {z['levels'][1]:.4f}",f"Decision threshold: {z['thr']:.3f}   cluster separation (Fisher): {z['sep']:.1f}",f"Analysis end: {z['end_ms']:.2f} ms",getattr(self,"sync_note",""),"","BIT STREAM (chronological):","".join(map(str,bits)),"",
-               (f"Data starts at symbol {z['data_idx']} (preamble/warble = symbols 0..{z['data_idx']-1})" if z.get("data_idx") else "Data start: not detected"),"PREAMBLE / WARBLE RUN-LENGTH VIEW (bit, symbol-count):"," ".join(f"{v}:{n}" for v,n in rr),
+               (f"Data starts at symbol {z['data_idx']} (leading symbols: 0..{z['data_idx']-1})" if z.get("data_idx") else "Data start: not detected"),"RUN-LENGTH VIEW (bit, symbol-count):"," ".join(f"{v}:{n}" for v,n in rr),
                "RUN-LENGTH ONLY:"," ".join(str(n) for _,n in rr),"",
                "RAW 8-BIT LSB-FIRST GROUPS:"," ".join(f"{b:02X}" for b in [sum(bits[i+j]<<j for j in range(8)) for i in range(0,len(bits)-7,8)]),"",
                "PER-SYMBOL DETAIL:","index,time_ms,tone_hz,bit,confidence,mark_score,space_score"]
