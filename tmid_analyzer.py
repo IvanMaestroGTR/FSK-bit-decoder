@@ -6,6 +6,8 @@ from tkinter import ttk, filedialog, messagebox
 
 def load_wav(path):
     with wave.open(path, "rb") as w:
+        if w.getcomptype() != "NONE":
+            raise ValueError("Only uncompressed PCM WAV files are supported")
         ch, width, rate, count = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
         raw = w.readframes(count)
     if width == 1: vals = [(v-128)/128.0 for v in raw]
@@ -318,6 +320,7 @@ class App(tk.Tk):
         if not p:return
         try:
             self.samples,self.file_rate,ch,width,count=load_wav(p);self.rate=self.file_rate;self.path=p
+            self.data_start_ms=None;self.sync_note=""
             self.meta={"channels":ch,"sample_width_bytes":width,"frames":count}
             self._apply_rate();self._update_label()
             self.auto_sync()
@@ -357,6 +360,7 @@ class App(tk.Tk):
 
     def auto_sync(self):
         if self.samples is None:messagebox.showinfo("No WAV","Open a recording first.");return
+        self.data_start_ms=None;self.sync_note=""
         try:
             baud,offset,pct,mark,space,a0,a1=self._settings()
             pm,ps,am,asp=self._prep(mark,space,baud)
